@@ -1490,6 +1490,29 @@ let create (config : Config.t)
                  ( External_transition.protocol_state state
                  |> Protocol_state.blockchain_state
                  |> Blockchain_state.timestamp |> Block_time.to_time )) ;
+
+            (* for Chainsafe *)
+            let block_bytes =
+              let len = External_transition.Stable.Latest.bin_size_t state in
+              let buf = Bin_prot.Common.create_buf len in
+              ignore
+                ( External_transition.Stable.Latest.bin_write_t buf ~pos:0 state
+                  : int ) ;
+              let bytes = Bytes.create len in
+              Bin_prot.Common.blit_buf_bytes buf bytes ~len ;
+              bytes
+            in
+            let blockfile =
+              sprintf "%s.hex"
+                ( External_transition.state_hash state
+                |> State_hash.to_base58_check )
+            in
+            [%log info] "Writing received block to file %s" blockfile ;
+            Out_channel.with_file blockfile ~f:(fun out_ch ->
+                let block_hex = Hex.Safe.to_hex (Bytes.to_string block_bytes) in
+                Out_channel.output_string out_ch block_hex) ;
+
+            (* end Chainsafe changes *)
             if config.log_gossip_heard.new_state then
               [%str_log info]
                 ~metadata:
