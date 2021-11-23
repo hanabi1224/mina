@@ -703,4 +703,8 @@ module type S = sig
              Staged_ledger.Staged_ledger_error.t ] )
          Deferred.Result.t
   end
+
+  val to_full_yojson : t -> Yojson.Safe.t
+
+  val precomputed_block_to_external_transition : Precomputed_block.t -> t
 end

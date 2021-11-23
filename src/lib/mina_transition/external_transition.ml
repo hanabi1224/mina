@@ -246,6 +246,18 @@ module Precomputed_block = struct
     assert (Yojson.Safe.equal json json_roundtrip)
 end
 
+(* for chainsafe *)
+let precomputed_block_to_external_transition (t : Precomputed_block.t) : t =
+  { protocol_state = t.protocol_state
+  ; protocol_state_proof = t.protocol_state_proof
+  ; staged_ledger_diff = t.staged_ledger_diff
+  ; delta_transition_chain_proof = t.delta_transition_chain_proof
+  ; current_protocol_version = Protocol_version.of_string_exn "2.0.0" (* HACK *)
+  ; proposed_protocol_version_opt = None
+  ; validation_callback =
+      Mina_net2.Validation_callback.create_without_expiration ()
+  }
+
 let consensus_state = Fn.compose Protocol_state.consensus_state protocol_state
 
 let blockchain_state = Fn.compose Protocol_state.blockchain_state protocol_state
@@ -286,6 +298,24 @@ let to_yojson t =
     ; ("protocol_state_proof", `String "<opaque>")
     ; ("staged_ledger_diff", `String "<opaque>")
     ; ("delta_transition_chain_proof", `String "<opaque>")
+    ; ( "current_protocol_version"
+      , `String (Protocol_version.to_string (current_protocol_version t)) )
+    ; ( "proposed_protocol_version"
+      , `String
+          (Option.value_map
+             (proposed_protocol_version_opt t)
+             ~default:"<None>" ~f:Protocol_version.to_string) )
+    ]
+
+(* for chainsafe *)
+let to_full_yojson t =
+  `Assoc
+    [ ("protocol_state", Protocol_state.value_to_yojson (protocol_state t))
+    ; ("protocol_state_proof", Proof.to_yojson (protocol_state_proof t))
+    ; ("staged_ledger_diff", Staged_ledger_diff.to_yojson (staged_ledger_diff t))
+    ; ( "delta_transition_chain_proof"
+      , [%to_yojson: State_hash.t * State_body_hash.t list]
+          (delta_transition_chain_proof t) )
     ; ( "current_protocol_version"
       , `String (Protocol_version.to_string (current_protocol_version t)) )
     ; ( "proposed_protocol_version"
