@@ -14,7 +14,7 @@ end]
 module Transaction_with_witness : sig
   (* TODO: The statement is redundant here - it can be computed from the witness and the transaction *)
   type t =
-    { transaction_with_info : Transaction_logic.Transaction_applied.t
+    { transaction_with_info : Ledger.Transaction_applied.t
     ; state_hash : State_hash.t * State_body_hash.t
     ; state_view : Mina_base.Snapp_predicate.Protocol_state.View.Stable.V1.t
     ; statement : Transaction_snark.Statement.t
@@ -152,8 +152,10 @@ val required_state_hashes : t -> State_hash.Set.t
 (** Validate protocol states required for proving the transactions. Returns an association list of state_hash and the corresponding state*)
 val check_required_protocol_states :
      t
-  -> protocol_states:Mina_state.Protocol_state.value list
-  -> (State_hash.t * Mina_state.Protocol_state.value) list Or_error.t
+  -> protocol_states:
+       Mina_state.Protocol_state.value State_hash.With_state_hashes.t list
+  -> Mina_state.Protocol_state.value State_hash.With_state_hashes.t list
+     Or_error.t
 
 (** All the proof bundles for snark workers*)
 val all_work_pairs :

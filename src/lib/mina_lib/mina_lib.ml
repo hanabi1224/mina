@@ -7,7 +7,6 @@ open Pipe_lib
 open Strict_pipe
 open Signature_lib
 open O1trace
-open Otp_lib
 open Network_peer
 module Archive_client = Archive_client
 module Config = Config
@@ -123,8 +122,6 @@ type t =
   ; pipes : pipes
   ; wallets : Secrets.Wallets.t
   ; coinbase_receiver : Consensus.Coinbase_receiver.t ref
-  ; block_production_keypairs :
-      (Agent.read_write Agent.flag, Keypair.And_compressed_pk.Set.t) Agent.t
   ; snark_job_state : Work_selector.State.t
   ; mutable next_producer_timing :
       Daemon_rpcs.Types.Status.Next_producer_timing.t option
@@ -156,9 +153,8 @@ let client_port t =
 
 (* Get the most recently set public keys  *)
 let block_production_pubkeys t : Public_key.Compressed.Set.t =
-  let keypair_and_compressed_pks, _ = Agent.get t.block_production_keypairs in
-  Public_key.Compressed.Set.map keypair_and_compressed_pks
-    ~f:(fun (_keypair, pk_compressed) -> pk_compressed)
+  t.config.block_production_keypairs |> Keypair.And_compressed_pk.Set.to_list
+  |> List.map ~f:snd |> Public_key.Compressed.Set.of_list
 
 let coinbase_receiver t = !(t.coinbase_receiver)
 
@@ -172,9 +168,6 @@ let replace_coinbase_receiver t coinbase_receiver =
       ; ("new_receiver", Consensus.Coinbase_receiver.to_yojson coinbase_receiver)
       ] ;
   t.coinbase_receiver := coinbase_receiver
-
-let replace_block_production_keypairs t kps =
-  Agent.update t.block_production_keypairs kps
 
 let log_snark_worker_warning t =
   if Option.is_some t.config.snark_coordinator_key then
@@ -799,7 +792,8 @@ let root_diff t =
                   | Transition_frontier.Diff.Full.With_mutant.E
                       (Root_transitioned { new_root; _ }, _) ->
                       let root_hash =
-                        Transition_frontier.Root_data.Limited.hash new_root
+                        (Transition_frontier.Root_data.Limited.hashes new_root)
+                          .state_hash
                       in
                       let new_root_breadcrumb =
                         Transition_frontier.(find_exn frontier root_hash)
@@ -891,6 +885,8 @@ let get_current_nonce t aid =
     |> Option.join
   with
   | None ->
+      (* IMPORTANT! Do not change the content of this error without
+       * updating Rosetta's construction API to handle the changes *)
       Error
         "Couldn't infer nonce for transaction from specified `sender` since \
          `sender` is not in the ledger or sent a transaction in transaction \
@@ -1175,25 +1171,29 @@ let start t =
     t.block_production_status := block_production_status ;
     t.next_producer_timing <- Some next_producer_timing
   in
-  Block_producer.run ~logger:t.config.logger
-    ~vrf_evaluator:t.processes.vrf_evaluator ~verifier:t.processes.verifier
-    ~set_next_producer_timing ~prover:t.processes.prover
-    ~trust_system:t.config.trust_system
-    ~transaction_resource_pool:
-      (Network_pool.Transaction_pool.resource_pool
-         t.components.transaction_pool)
-    ~get_completed_work:
-      (Network_pool.Snark_pool.get_completed_work t.components.snark_pool)
-    ~time_controller:t.config.time_controller
-    ~keypairs:(Agent.read_only t.block_production_keypairs)
-    ~coinbase_receiver:t.coinbase_receiver
-    ~consensus_local_state:t.config.consensus_local_state
-    ~frontier_reader:t.components.transition_frontier
-    ~transition_writer:t.pipes.producer_transition_writer
-    ~log_block_creation:t.config.log_block_creation
-    ~precomputed_values:t.config.precomputed_values
-    ~block_reward_threshold:t.config.block_reward_threshold
-    ~block_produced_bvar:t.components.block_produced_bvar ;
+  if
+    not
+      (Keypair.And_compressed_pk.Set.is_empty
+         t.config.block_production_keypairs)
+  then
+    Block_producer.run ~logger:t.config.logger
+      ~vrf_evaluator:t.processes.vrf_evaluator ~verifier:t.processes.verifier
+      ~set_next_producer_timing ~prover:t.processes.prover
+      ~trust_system:t.config.trust_system
+      ~transaction_resource_pool:
+        (Network_pool.Transaction_pool.resource_pool
+           t.components.transaction_pool)
+      ~get_completed_work:
+        (Network_pool.Snark_pool.get_completed_work t.components.snark_pool)
+      ~time_controller:t.config.time_controller
+      ~coinbase_receiver:t.coinbase_receiver
+      ~consensus_local_state:t.config.consensus_local_state
+      ~frontier_reader:t.components.transition_frontier
+      ~transition_writer:t.pipes.producer_transition_writer
+      ~log_block_creation:t.config.log_block_creation
+      ~precomputed_values:t.config.precomputed_values
+      ~block_reward_threshold:t.config.block_reward_threshold
+      ~block_produced_bvar:t.components.block_produced_bvar ;
   perform_compaction t ;
   let () =
     match t.config.node_status_url with
@@ -1277,15 +1277,6 @@ let create ?wallets (config : Config.t) =
   let monitor = Option.value ~default:(Monitor.create ()) config.monitor in
   Async.Scheduler.within' ~monitor (fun () ->
       trace "mina_lib" (fun () ->
-          let block_production_keypairs =
-            Agent.create
-              ~f:(fun kps ->
-                Keypair.Set.to_list kps
-                |> List.map ~f:(fun kp ->
-                       (kp, Public_key.compress kp.Keypair.public_key))
-                |> Keypair.And_compressed_pk.Set.of_list)
-              config.initial_block_production_keypairs
-          in
           let%bind prover =
             Monitor.try_with ~here:[%here]
               ~rest:
@@ -1337,7 +1328,7 @@ let create ?wallets (config : Config.t) =
                     Vrf_evaluator.create ~constraint_constants ~pids:config.pids
                       ~logger:config.logger ~conf_dir:config.conf_dir
                       ~consensus_constants
-                      ~keypairs:(Agent.get block_production_keypairs |> fst)))
+                      ~keypairs:config.block_production_keypairs))
             >>| Result.ok_exn
           in
           let snark_worker =
@@ -1511,18 +1502,16 @@ let create ?wallets (config : Config.t) =
                           Broadcast_pipe.Reader.peek frontier_broadcast_pipe_r
                         with
                         | None ->
-                            ( config.precomputed_values.protocol_state_with_hash
+                            ( config.precomputed_values
+                                .protocol_state_with_hashes
                                 .hash
+                                .state_hash
                             , None
                             , [] )
                         | Some frontier ->
                             let tip = Transition_frontier.best_tip frontier in
                             let protocol_state_hash =
-                              let state =
-                                Transition_frontier.Breadcrumb.protocol_state
-                                  tip
-                              in
-                              Mina_state.Protocol_state.hash state
+                              Transition_frontier.Breadcrumb.state_hash tip
                             in
                             let k_breadcrumbs =
                               Transition_frontier.root frontier
@@ -1554,10 +1543,8 @@ let create ?wallets (config : Config.t) =
                               (Mina_incremental.Status.Observer.value status)
                       in
                       let block_producers =
-                        let public_keys, _ =
-                          Agent.get block_production_keypairs
-                        in
-                        Public_key.Compressed.Set.map public_keys ~f:snd
+                        config.block_production_keypairs
+                        |> Public_key.Compressed.Set.map ~f:snd
                         |> Set.to_list
                       in
                       let ban_statuses =
@@ -1674,10 +1661,14 @@ let create ?wallets (config : Config.t) =
                                    Mina_networking.refused_answer_query_string
                                    ledger_hash))))
               ~get_ancestry:
-                (handle_request "get_ancestry"
-                   ~f:
-                     (Sync_handler.Root.prove ~consensus_constants
-                        ~logger:config.logger))
+                (handle_request "get_ancestry" ~f:(fun ~frontier s ->
+                     s
+                     |> With_hash.map_hash ~f:(fun state_hash ->
+                            { State_hash.State_hashes.state_hash
+                            ; state_body_hash = None
+                            })
+                     |> Sync_handler.Root.prove ~consensus_constants
+                          ~logger:config.logger ~frontier))
               ~get_best_tip:
                 (handle_request "get_best_tip" ~f:(fun ~frontier () ->
                      let open Option.Let_syntax in
@@ -1872,7 +1863,8 @@ let create ?wallets (config : Config.t) =
                 valid_transitions_for_network
                 ~f:(fun (`Transition transition, `Source source) ->
                   let hash =
-                    External_transition.Validated.state_hash transition
+                    (External_transition.Validated.state_hashes transition)
+                      .state_hash
                   in
                   let consensus_state =
                     transition |> External_transition.Validated.consensus_state
@@ -2088,7 +2080,6 @@ let create ?wallets (config : Config.t) =
                 ; local_snark_work_writer
                 }
             ; wallets
-            ; block_production_keypairs
             ; coinbase_receiver = ref config.coinbase_receiver
             ; snark_job_state = snark_jobs_state
             ; subscriptions

@@ -121,7 +121,7 @@ let precomputed_values = Precomputed_values.compiled_inputs
 let state_body =
   Mina_state.(
     Lazy.map precomputed_values ~f:(fun values ->
-        values.protocol_state_with_hash.data |> Protocol_state.body))
+        values.protocol_state_with_hashes.data |> Protocol_state.body))
 
 let curr_state_view = Lazy.map state_body ~f:Mina_state.Protocol_state.Body.view
 
@@ -153,10 +153,9 @@ let profile (module T : Transaction_snark.S) sparse_ledger0
         let next_available_token_before =
           Sparse_ledger.next_available_token sparse_ledger
         in
-        let sparse_ledger', _ =
-          Sparse_ledger.apply_transaction ~constraint_constants ~txn_state_view
-            sparse_ledger (Transaction.forget t)
-          |> Or_error.ok_exn
+        let sparse_ledger' =
+          Sparse_ledger.apply_transaction_exn ~constraint_constants
+            ~txn_state_view sparse_ledger (Transaction.forget t)
         in
         let next_available_token_after =
           Sparse_ledger.next_available_token sparse_ledger'
@@ -221,10 +220,9 @@ let check_base_snarks sparse_ledger0 (transitions : Transaction.Valid.t list)
           let next_available_token_before =
             Sparse_ledger.next_available_token sparse_ledger
           in
-          let sparse_ledger', _ =
-            Sparse_ledger.apply_transaction ~constraint_constants
+          let sparse_ledger' =
+            Sparse_ledger.apply_transaction_exn ~constraint_constants
               ~txn_state_view sparse_ledger (Transaction.forget t)
-            |> Or_error.ok_exn
           in
           let next_available_token_after =
             Sparse_ledger.next_available_token sparse_ledger'
@@ -269,10 +267,9 @@ let generate_base_snarks_witness sparse_ledger0
           let next_available_token_before =
             Sparse_ledger.next_available_token sparse_ledger
           in
-          let sparse_ledger', _ =
-            Sparse_ledger.apply_transaction ~constraint_constants
+          let sparse_ledger' =
+            Sparse_ledger.apply_transaction_exn ~constraint_constants
               ~txn_state_view sparse_ledger (Transaction.forget t)
-            |> Or_error.ok_exn
           in
           let next_available_token_after =
             Sparse_ledger.next_available_token sparse_ledger'
