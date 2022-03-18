@@ -1382,7 +1382,8 @@ let create ?wallets (config : Config.t) =
               bytes
             in
             let state_hash_base58 =
-              state_hash genesis_block |> State_hash.to_base58_check
+              (state_hashes genesis_block).state_hash
+              |> State_hash.to_base58_check
             in
             let blockfile = sprintf "genesis-%s.hex" state_hash_base58 in
             [%log info] "Writing serialization of genesis block to file %s"
