@@ -1518,7 +1518,8 @@ let create (config : Config.t)
               bytes
             in
             let state_hash_base58 =
-              External_transition.state_hash state |> State_hash.to_base58_check
+              (External_transition.state_hashes state).state_hash
+              |> State_hash.to_base58_check
             in
             let blockfile = sprintf "%s.hex" state_hash_base58 in
             [%log info] "Writing serialization of received block to file %s"
